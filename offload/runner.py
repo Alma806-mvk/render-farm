@@ -111,12 +111,16 @@ def apt(pkgs, libs):
 def setup(m, root):
     t = time.time(); s = m.get('setup', {}); pip = s.get('pip', [])
     apt_state = apt(s.get('apt', []), s.get('apt_libs', []))
-    if pip: subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '--disable-pip-version-check'] + pip, check=True)
+    wheels = root / s['wheels'] if s.get('wheels') else None          # the job's packages shipped as a store layer
+    if pip and not (wheels and wheels.exists() and subprocess.run(
+            [sys.executable, '-m', 'pip', 'install', '-q', '--disable-pip-version-check', '--no-index', '--find-links', str(wheels)] + pip).returncode == 0):
+        subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '--disable-pip-version-check'] + pip, check=True)
     how = ensure_ffmpeg(root / '.offload_bin')
     if s.get('warmup'):                                              # once per machine, before pieces run in parallel (model downloads)
         ctx = {'python': sys.executable, 'root': str(root)}
-        subprocess.run([fmt(x, ctx) for x in s['warmup']], cwd=root / m.get('workdir', ''), stdout=subprocess.DEVNULL, check=False)
-    return {'setup_s': round(time.time() - t, 1), 'ffmpeg': how, 'apt': apt_state}
+        env = dict(os.environ, **{k: fmt(v, ctx) for k, v in m.get('env', {}).items()})
+        subprocess.run([fmt(x, ctx) for x in s['warmup']], cwd=root / m.get('workdir', ''), env=env, stdout=subprocess.DEVNULL, check=False)
+    return {'setup_s': round(time.time() - t, 1), 'ffmpeg': how, 'apt': apt_state, 'wheels': bool(wheels and wheels.exists())}
 
 
 # ---------- run ----------
