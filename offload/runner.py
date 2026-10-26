@@ -122,26 +122,35 @@ def apt(pkgs, libs, bins=()):
     pre = [] if os.geteuid() == 0 else (['sudo', '-n'] if shutil.which('sudo') else None)
     if pre is None: return 'no root'
     env = dict(os.environ, DEBIAN_FRONTEND='noninteractive')
-    subprocess.run(pre + ['apt-get', 'update', '-qq'], env=env, stdout=subprocess.DEVNULL, check=True)
-    subprocess.run(pre + ['apt-get', 'install', '-y', '-qq', '--no-install-recommends'] + pkgs, env=env, stdout=subprocess.DEVNULL, check=True)
-    return 'installed'
+    for attempt in (1, 2):                       # apt has no timeout of its own: one stalled mirror held a machine 11+ min (26 Oct)
+        try:
+            subprocess.run(pre + ['apt-get', 'update', '-qq'], env=env, stdout=subprocess.DEVNULL, check=True, timeout=180)
+            subprocess.run(pre + ['apt-get', 'install', '-y', '-qq', '--no-install-recommends'] + pkgs, env=env,
+                           stdout=subprocess.DEVNULL, check=True, timeout=300)
+            return 'installed' if attempt == 1 else 'installed (retry)'
+        except subprocess.TimeoutExpired:
+            log(f'apt stalled (attempt {attempt})')
+    raise RuntimeError('apt stalled twice')
 
 
 def setup(m, root):
     t = time.time(); s = m.get('setup', {}); pip = s.get('pip', []); steps = {}
     def lap(name):
-        nonlocal t; steps[name] = round(time.time() - t, 1); t = time.time()
+        nonlocal t; steps[name] = round(time.time() - t, 1); t = time.time(); log(f'setup {name[:-2]} done in {steps[name]} s')
     apt_state = apt(s.get('apt', []), s.get('apt_libs', []), s.get('apt_bins', [])); lap('apt_s')
     wheels = root / s['wheels'] if s.get('wheels') else None          # the job's packages shipped as a store layer
     if pip and not (wheels and wheels.exists() and subprocess.run(
-            [sys.executable, '-m', 'pip', 'install', '-q', '--disable-pip-version-check', '--no-index', '--find-links', str(wheels)] + pip).returncode == 0):
-        subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '--disable-pip-version-check'] + pip, check=True)
+            [sys.executable, '-m', 'pip', 'install', '-q', '--disable-pip-version-check', '--no-index', '--find-links', str(wheels)] + pip,
+            timeout=600).returncode == 0):
+        subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '--disable-pip-version-check'] + pip, check=True, timeout=900)
     lap('pip_s')
     how = static_ffmpeg(root / '.offload_bin') if s.get('static_ffmpeg') else ensure_ffmpeg(root / '.offload_bin'); lap('ffmpeg_s')
     if s.get('warmup'):                                              # once per machine, before pieces run in parallel (model downloads)
         ctx = {'python': sys.executable, 'root': str(root)}
         env = dict(os.environ, **{k: fmt(v, ctx) for k, v in m.get('env', {}).items()})
-        subprocess.run([fmt(x, ctx) for x in s['warmup']], cwd=root / m.get('workdir', ''), env=env, stdout=subprocess.DEVNULL, check=False)
+        try: subprocess.run([fmt(x, ctx) for x in s['warmup']], cwd=root / m.get('workdir', ''), env=env, stdout=subprocess.DEVNULL,
+                            check=False, timeout=600)
+        except subprocess.TimeoutExpired: log('warmup stalled: pieces will fetch what they need themselves')
     lap('warmup_s')
     return {'setup_s': round(sum(steps.values()), 1), **steps, 'ffmpeg': how, 'apt': apt_state, 'wheels': bool(wheels and wheels.exists())}
 
@@ -158,7 +167,11 @@ def run_chunk(m, c, root, out):
     env = dict(os.environ, OFFLOAD_ROOT=str(root), **{k: fmt(v, ctx) for k, v in m.get('env', {}).items()})
     t = time.time()
     with open(out / f"chunk_{c['i']:04d}.log", 'w', encoding='utf-8') as lf:
-        code = subprocess.run(cmd, cwd=root / m.get('workdir', ''), env=env, stdout=lf, stderr=subprocess.STDOUT).returncode
+        try:                                     # a stuck piece fails after piece_timeout_s instead of holding the machine for hours
+            code = subprocess.run(cmd, cwd=root / m.get('workdir', ''), env=env, stdout=lf, stderr=subprocess.STDOUT,
+                                  timeout=m.get('piece_timeout_s', 1800)).returncode
+        except subprocess.TimeoutExpired:
+            lf.write(f"\n[offload] piece {c['i']} stopped after {m.get('piece_timeout_s', 1800)} s (stuck)\n"); code = 124
     return {'i': c['i'], 'exit': code, 'seconds': round(time.time() - t, 1)}
 
 
