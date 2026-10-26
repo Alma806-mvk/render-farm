@@ -1,0 +1,147 @@
+# Free Blender render farm on GitHub Actions (CPU, up to 20 machines in parallel).
+#
+# HOW TO USE
+#   1. Create a PUBLIC GitHub repo (public repos get free, unlimited standard runners:
+#      4 vCPU / 16 GB RAM each, 20 jobs in parallel on the Free plan, 6 h max per job).
+#   2. Copy this file to .github/workflows/blender-farm.yml and copy
+#      tools/cloud-render/render_blend_cpu.py to the same path in that repo.
+#   3. Commit your .blend file (e.g. scenes/demo.blend). Pack textures into the file first
+#      (File > External Data > Pack Resources) so the runner has everything.
+#   4. Actions tab -> "Blender render farm" -> Run workflow -> set frame range and chunks.
+#   5. When it finishes, download the "render-mp4" artifact (and "frames-*" if you want PNGs).
+#
+# HOW IT WORKS
+#   plan   -> splits the frame range into N chunks
+#   render -> one runner per chunk, Blender installed with `pip install bpy`, renders with the
+#             same render_blend_cpu.py that was tested in a Claude Code cloud session
+#   stitch -> downloads all frames and encodes an MP4 with ffmpeg (pre-installed on runners)
+#
+# STATUS: written 2026-10-26 from the tested cloud-session script; YAML validated, but this
+# workflow has NOT yet been executed on GitHub. Do a first run with a tiny range
+# (start=1, end=8, chunks=4) before trusting it with a long animation.
+#
+# LIMITS TO KNOW
+#   * Artifact storage: GitHub documents 500 MB of artifact storage for the Free plan on private
+#     repos; it is not clearly documented for public repos. Keep retention short (set below) and
+#     delete old artifacts if uploads start failing.
+#   * Everything in a public repo is public. Don't commit scenes you want to keep private.
+
+name: Blender render farm
+
+on:
+  workflow_dispatch:
+    inputs:
+      blend:
+        description: "Path to the .blend file in this repo"
+        required: true
+        default: "scenes/demo.blend"
+      start:
+        description: "First frame"
+        required: true
+        default: "1"
+      end:
+        description: "Last frame"
+        required: true
+        default: "24"
+      chunks:
+        description: "Number of runners to split across (Free plan runs 20 in parallel)"
+        required: true
+        default: "8"
+      samples:
+        description: "Cycles samples (0 = keep the file's setting)"
+        required: true
+        default: "0"
+      scale:
+        description: "Resolution percentage (0 = keep the file's setting)"
+        required: true
+        default: "0"
+      fps:
+        description: "Frame rate of the stitched MP4"
+        required: true
+        default: "24"
+      bpy_version:
+        description: "bpy (Blender) version on PyPI"
+        required: true
+        default: "5.2.3"
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.split.outputs.matrix }}
+    steps:
+      - id: split
+        shell: python
+        env:
+          START: ${{ inputs.start }}
+          END: ${{ inputs.end }}
+          CHUNKS: ${{ inputs.chunks }}
+        run: |
+          import json, math, os
+          s, e, n = int(os.environ["START"]), int(os.environ["END"]), int(os.environ["CHUNKS"])
+          total = e - s + 1
+          n = max(1, min(n, total))
+          size = math.ceil(total / n)
+          chunks = [{"start": a, "end": min(a + size - 1, e)} for a in range(s, e + 1, size)]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("matrix=" + json.dumps(chunks) + "\n")
+          print(chunks)
+
+  render:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        chunk: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Blender (bpy) and Mesa EGL
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libegl1 libgl1 libegl-mesa0 libgl1-mesa-dri
+          python -m pip install -q "bpy==${{ inputs.bpy_version }}"
+          python -c "import bpy; print('bpy', bpy.app.version_string)"
+
+      - name: Render frames ${{ matrix.chunk.start }}-${{ matrix.chunk.end }}
+        run: |
+          ARGS=""
+          if [ "${{ inputs.samples }}" != "0" ]; then ARGS="$ARGS --samples ${{ inputs.samples }}"; fi
+          if [ "${{ inputs.scale }}" != "0" ]; then ARGS="$ARGS --scale ${{ inputs.scale }}"; fi
+          python tools/cloud-render/render_blend_cpu.py "${{ inputs.blend }}" frames \
+            --start ${{ matrix.chunk.start }} --end ${{ matrix.chunk.end }} $ARGS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frames-${{ matrix.chunk.start }}-${{ matrix.chunk.end }}
+          path: frames/
+          retention-days: 3
+
+  stitch:
+    needs: render
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: frames-*
+          merge-multiple: true
+          path: frames
+
+      - name: Stitch MP4 with ffmpeg
+        run: |
+          ls frames | head -n 5
+          ffmpeg -y -framerate ${{ inputs.fps }} -start_number ${{ inputs.start }} \
+            -i frames/frame_%04d.png -c:v libx264 -pix_fmt yuv420p -crf 18 render.mp4
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: render-mp4
+          path: render.mp4
+          retention-days: 7
