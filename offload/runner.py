@@ -96,10 +96,12 @@ def ensure_ffmpeg(bindir):
     return 'imageio-ffmpeg'
 
 
-def apt(pkgs, libs):
-    """System packages (e.g. libegl1 for skia), only when one of `libs` is missing and apt is usable (root or sudo)."""
+def apt(pkgs, libs, bins=()):
+    """System packages (e.g. libegl1 for skia, ffmpeg for ffprobe), only when one of `libs` or `bins` is missing and apt is
+    usable (root or sudo)."""
     import ctypes.util
-    if not pkgs or (libs and all(ctypes.util.find_library(l) for l in libs)) or not shutil.which('apt-get'): return 'skipped'
+    have = (not libs or all(ctypes.util.find_library(l) for l in libs)) and all(shutil.which(b) for b in bins)
+    if not pkgs or ((libs or bins) and have) or not shutil.which('apt-get'): return 'skipped'
     pre = [] if os.geteuid() == 0 else (['sudo', '-n'] if shutil.which('sudo') else None)
     if pre is None: return 'no root'
     env = dict(os.environ, DEBIAN_FRONTEND='noninteractive')
@@ -110,7 +112,7 @@ def apt(pkgs, libs):
 
 def setup(m, root):
     t = time.time(); s = m.get('setup', {}); pip = s.get('pip', [])
-    apt_state = apt(s.get('apt', []), s.get('apt_libs', []))
+    apt_state = apt(s.get('apt', []), s.get('apt_libs', []), s.get('apt_bins', []))
     wheels = root / s['wheels'] if s.get('wheels') else None          # the job's packages shipped as a store layer
     if pip and not (wheels and wheels.exists() and subprocess.run(
             [sys.executable, '-m', 'pip', 'install', '-q', '--disable-pip-version-check', '--no-index', '--find-links', str(wheels)] + pip).returncode == 0):
