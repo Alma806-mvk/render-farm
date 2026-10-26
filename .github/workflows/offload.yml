@@ -17,13 +17,17 @@ on:
         description: "Python version"
         required: false
         default: "3.13"
+      os:
+        description: "Runner image: ubuntu-latest, or windows-latest for pixel-identical text with the PC (DirectWrite)"
+        required: false
+        default: "ubuntu-latest"
 
 permissions:
   contents: read
 
 jobs:
   run:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.os }}
     timeout-minutes: 340
     strategy:
       fail-fast: false
@@ -38,6 +42,7 @@ jobs:
         with:
           python-version: ${{ inputs.python }}
       - name: Run machine ${{ matrix.machine }}
+        shell: bash
         env:
           OFFLOAD_KEY: ${{ secrets.FARM_KEY }}
         run: |
