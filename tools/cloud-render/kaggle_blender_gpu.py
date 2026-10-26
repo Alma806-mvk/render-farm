@@ -32,13 +32,23 @@ if BLEND.startswith("http"):
     subprocess.run(["wget", "-q", "-O", local, BLEND], check=True)
     BLEND = local
 
+import re
+import urllib.request
+
 major_minor = ".".join(BLENDER_VER.split(".")[:2])
-folder = f"blender-{BLENDER_VER}-linux-x64"
+base = f"https://download.blender.org/release/Blender{major_minor}/"
+# Find the newest linux-x64 build in that folder, so a wrong patch number can't break the download.
+listing = urllib.request.urlopen(base).read().decode()
+builds = sorted(set(re.findall(r"blender-(\d+\.\d+\.\d+)-linux-x64\.tar\.xz", listing)),
+                key=lambda v: tuple(int(x) for x in v.split(".")))
+if not builds:
+    raise SystemExit(f"no linux-x64 build found at {base}; set BLENDER_VER to an existing version")
+version = BLENDER_VER if BLENDER_VER in builds else builds[-1]
+folder = f"blender-{version}-linux-x64"
 tarball = f"{folder}.tar.xz"
 if not os.path.isdir(folder):
-    url = f"https://download.blender.org/release/Blender{major_minor}/{tarball}"
-    print("downloading", url)
-    subprocess.run(["wget", "-q", url], check=True)
+    print("downloading", base + tarball)
+    subprocess.run(["wget", "-q", base + tarball], check=True)
     subprocess.run(["tar", "xf", tarball], check=True)
 blender = f"./{folder}/blender"
 
