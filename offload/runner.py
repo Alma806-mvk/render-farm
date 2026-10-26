@@ -61,15 +61,15 @@ def sha256(path):
 def log(msg): print(time.strftime('%H:%M:%S'), msg, flush=True)
 
 
-def download(url, path, tries=4):
-    for k in range(tries):
+def download(url, path, tries=8):
+    for k in range(tries):                       # GitHub's release CDN answered 504 for over 20 s on 26 Oct: back off up to ~4 min
         try:
             req = urllib.request.Request(url, headers={'User-Agent': 'offload-runner/1'})
             with urllib.request.urlopen(req, timeout=600) as r, open(path, 'wb') as f: shutil.copyfileobj(r, f, 8 << 20)
             return
-        except Exception:
+        except Exception as e:
             if k == tries - 1: raise
-            time.sleep(3 * (k + 1))
+            wait = min(60, 5 * 2 ** k); log(f'download failed ({e}); retry in {wait} s'); time.sleep(wait)
 
 
 def fetch_layer(layer, root, tmp):
