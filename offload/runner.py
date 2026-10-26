@@ -122,15 +122,14 @@ def apt(pkgs, libs, bins=()):
     pre = [] if os.geteuid() == 0 else (['sudo', '-n'] if shutil.which('sudo') else None)
     if pre is None: return 'no root'
     env = dict(os.environ, DEBIAN_FRONTEND='noninteractive')
-    for attempt in (1, 2):                       # apt has no timeout of its own: one stalled mirror held a machine 11+ min (26 Oct)
-        try:
-            subprocess.run(pre + ['apt-get', 'update', '-qq'], env=env, stdout=subprocess.DEVNULL, check=True, timeout=180)
-            subprocess.run(pre + ['apt-get', 'install', '-y', '-qq', '--no-install-recommends'] + pkgs, env=env,
-                           stdout=subprocess.DEVNULL, check=True, timeout=300)
-            return 'installed' if attempt == 1 else 'installed (retry)'
-        except subprocess.TimeoutExpired:
-            log(f'apt stalled (attempt {attempt})')
-    raise RuntimeError('apt stalled twice')
+    install = pre + ['apt-get', 'install', '-y', '-qq', '--no-install-recommends'] + pkgs
+    def run(cmd, limit):
+        try: return subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=limit).returncode == 0
+        except subprocess.TimeoutExpired: log(f'apt stalled after {limit} s: {cmd[len(pre) + 1]}'); return False
+    if run(install, 90): return 'installed'       # the image's package lists usually suffice: skips the slow mirror refresh
+    for attempt in (1, 2):                       # apt has no timeout of its own: a stalled mirror held machines 4-11+ min (26 Oct)
+        if run(pre + ['apt-get', 'update', '-qq'], 90) and run(install, 150): return 'installed after update'
+    raise RuntimeError('apt failed twice')
 
 
 def setup(m, root):
