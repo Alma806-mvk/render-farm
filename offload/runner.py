@@ -90,8 +90,8 @@ def ensure_ffmpeg(bindir):
     if shutil.which('ffmpeg'): return 'system'
     subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', 'imageio-ffmpeg'], check=True)
     import imageio_ffmpeg
-    bindir.mkdir(parents=True, exist_ok=True); exe = bindir / 'ffmpeg'
-    if not exe.exists(): os.symlink(imageio_ffmpeg.get_ffmpeg_exe(), exe)
+    bindir.mkdir(parents=True, exist_ok=True); exe = bindir / ('ffmpeg.exe' if os.name == 'nt' else 'ffmpeg')
+    if not exe.exists(): shutil.copy(imageio_ffmpeg.get_ffmpeg_exe(), exe); exe.chmod(0o755)
     os.environ['PATH'] = f'{bindir}{os.pathsep}' + os.environ['PATH']
     return 'imageio-ffmpeg'
 
