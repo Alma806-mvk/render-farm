@@ -113,6 +113,9 @@ def setup(m, root):
     apt_state = apt(s.get('apt', []), s.get('apt_libs', []))
     if pip: subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '--disable-pip-version-check'] + pip, check=True)
     how = ensure_ffmpeg(root / '.offload_bin')
+    if s.get('warmup'):                                              # once per machine, before pieces run in parallel (model downloads)
+        ctx = {'python': sys.executable, 'root': str(root)}
+        subprocess.run([fmt(x, ctx) for x in s['warmup']], cwd=root / m.get('workdir', ''), stdout=subprocess.DEVNULL, check=False)
     return {'setup_s': round(time.time() - t, 1), 'ffmpeg': how, 'apt': apt_state}
 
 
