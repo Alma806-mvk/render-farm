@@ -1,0 +1,10 @@
+{
+  "model": "haiku",
+  "env": {
+    "BASH_DEFAULT_TIMEOUT_MS": "7200000",
+    "BASH_MAX_TIMEOUT_MS": "7200000"
+  },
+  "permissions": {
+    "allow": ["Bash(bash offload/cloud_worker.sh:*)", "Bash(OFFLOAD_KEY=*)"]
+  }
+}
