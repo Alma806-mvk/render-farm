@@ -96,6 +96,23 @@ def ensure_ffmpeg(bindir):
     return 'imageio-ffmpeg'
 
 
+FFMPEG_STATIC = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz'
+
+
+def static_ffmpeg(bindir):
+    """ffmpeg + ffprobe as one static download from GitHub (seconds), instead of `apt install ffmpeg` (minutes)."""
+    if shutil.which('ffprobe') and shutil.which('ffmpeg'): return 'system'
+    bindir.mkdir(parents=True, exist_ok=True); arc = bindir / 'ffmpeg.tar.xz'
+    download(FFMPEG_STATIC, arc)
+    with tarfile.open(arc) as t:
+        for mbr in t.getmembers():
+            if mbr.name.endswith(('/bin/ffmpeg', '/bin/ffprobe')):
+                mbr.name = Path(mbr.name).name; t.extract(mbr, bindir)
+    arc.unlink()
+    os.environ['PATH'] = f'{bindir}{os.pathsep}' + os.environ['PATH']
+    return 'static'
+
+
 def apt(pkgs, libs, bins=()):
     """System packages (e.g. libegl1 for skia, ffmpeg for ffprobe), only when one of `libs` or `bins` is missing and apt is
     usable (root or sudo)."""
@@ -111,18 +128,22 @@ def apt(pkgs, libs, bins=()):
 
 
 def setup(m, root):
-    t = time.time(); s = m.get('setup', {}); pip = s.get('pip', [])
-    apt_state = apt(s.get('apt', []), s.get('apt_libs', []), s.get('apt_bins', []))
+    t = time.time(); s = m.get('setup', {}); pip = s.get('pip', []); steps = {}
+    def lap(name):
+        nonlocal t; steps[name] = round(time.time() - t, 1); t = time.time()
+    apt_state = apt(s.get('apt', []), s.get('apt_libs', []), s.get('apt_bins', [])); lap('apt_s')
     wheels = root / s['wheels'] if s.get('wheels') else None          # the job's packages shipped as a store layer
     if pip and not (wheels and wheels.exists() and subprocess.run(
             [sys.executable, '-m', 'pip', 'install', '-q', '--disable-pip-version-check', '--no-index', '--find-links', str(wheels)] + pip).returncode == 0):
         subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '--disable-pip-version-check'] + pip, check=True)
-    how = ensure_ffmpeg(root / '.offload_bin')
+    lap('pip_s')
+    how = static_ffmpeg(root / '.offload_bin') if s.get('static_ffmpeg') else ensure_ffmpeg(root / '.offload_bin'); lap('ffmpeg_s')
     if s.get('warmup'):                                              # once per machine, before pieces run in parallel (model downloads)
         ctx = {'python': sys.executable, 'root': str(root)}
         env = dict(os.environ, **{k: fmt(v, ctx) for k, v in m.get('env', {}).items()})
         subprocess.run([fmt(x, ctx) for x in s['warmup']], cwd=root / m.get('workdir', ''), env=env, stdout=subprocess.DEVNULL, check=False)
-    return {'setup_s': round(time.time() - t, 1), 'ffmpeg': how, 'apt': apt_state, 'wheels': bool(wheels and wheels.exists())}
+    lap('warmup_s')
+    return {'setup_s': round(sum(steps.values()), 1), **steps, 'ffmpeg': how, 'apt': apt_state, 'wheels': bool(wheels and wheels.exists())}
 
 
 # ---------- run ----------
