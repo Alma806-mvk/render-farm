@@ -14,7 +14,7 @@
 #   plan   -> splits the frame range into N chunks
 #   render -> one runner per chunk, Blender installed with `pip install bpy`, renders with the
 #             same render_blend_cpu.py that was tested in a Claude Code cloud session
-#   stitch -> downloads all frames and encodes an MP4 with ffmpeg (pre-installed on runners)
+#   stitch -> downloads all frames and encodes an MP4 with ffmpeg (installed via apt in the job)
 #
 # STATUS: written 2026-10-26 from the tested cloud-session script; YAML validated, but this
 # workflow has NOT yet been executed on GitHub. Do a first run with a tiny range
@@ -136,6 +136,7 @@ jobs:
 
       - name: Stitch MP4 with ffmpeg
         run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
           ls frames | head -n 5
           ffmpeg -y -framerate ${{ inputs.fps }} -start_number ${{ inputs.start }} \
             -i frames/frame_%04d.png -c:v libx264 -pix_fmt yuv420p -crf 18 render.mp4
