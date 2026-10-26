@@ -96,11 +96,24 @@ def ensure_ffmpeg(bindir):
     return 'imageio-ffmpeg'
 
 
+def apt(pkgs, libs):
+    """System packages (e.g. libegl1 for skia), only when one of `libs` is missing and apt is usable (root or sudo)."""
+    import ctypes.util
+    if not pkgs or (libs and all(ctypes.util.find_library(l) for l in libs)) or not shutil.which('apt-get'): return 'skipped'
+    pre = [] if os.geteuid() == 0 else (['sudo', '-n'] if shutil.which('sudo') else None)
+    if pre is None: return 'no root'
+    env = dict(os.environ, DEBIAN_FRONTEND='noninteractive')
+    subprocess.run(pre + ['apt-get', 'update', '-qq'], env=env, stdout=subprocess.DEVNULL, check=True)
+    subprocess.run(pre + ['apt-get', 'install', '-y', '-qq', '--no-install-recommends'] + pkgs, env=env, stdout=subprocess.DEVNULL, check=True)
+    return 'installed'
+
+
 def setup(m, root):
-    t = time.time(); pip = m.get('setup', {}).get('pip', [])
+    t = time.time(); s = m.get('setup', {}); pip = s.get('pip', [])
+    apt_state = apt(s.get('apt', []), s.get('apt_libs', []))
     if pip: subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '--disable-pip-version-check'] + pip, check=True)
     how = ensure_ffmpeg(root / '.offload_bin')
-    return {'setup_s': round(time.time() - t, 1), 'ffmpeg': how}
+    return {'setup_s': round(time.time() - t, 1), 'ffmpeg': how, 'apt': apt_state}
 
 
 # ---------- run ----------
